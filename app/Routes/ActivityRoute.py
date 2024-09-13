@@ -1,19 +1,30 @@
 import os
 
+import joblib
 from bson import ObjectId
 from werkzeug.utils import secure_filename
-
+import requests
 from app.Controllers.ActivityController import ActivityController
 from app import api, mongo, app
 from flask_restx import Resource, fields
 from datetime import datetime
 from flask import request, jsonify
-
+from apscheduler.schedulers.background import BackgroundScheduler
+import numpy as np
+from sklearn.linear_model import LinearRegression
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from app.Routes.userRoute import allowed_file
+from sklearn.metrics.pairwise import cosine_similarity
 
+
+scheduler = BackgroundScheduler()
 activity_controller = ActivityController(mongo)
 db = mongo.db
 collection = db['Activities']
+# # Weather API setup (use your OpenWeatherMap API key)
+# WEATHER_API_KEY = "902d4f6c63d0208b6a5b8721752e817b"
+# WEATHER_API_URL = "https://api.openweathermap.org/data/2.5/weather"
 
 activity_model = api.model('Activity', {
     'name': fields.String(required=True, description='Activity Name'),
@@ -27,18 +38,125 @@ activity_model = api.model('Activity', {
     'images': fields.List(fields.String, description='Image URLs')
 })
 
-# @api.route('/activities/<string:activity_id>')
-# class ActivityResource(Resource):
-#     def get(self, activity_id):
-#         return activity_controller.get_activity_by_id(activity_id)
-#
-#     @api.expect(activity_model)
-#     def put(self, activity_id):
-#         return activity_controller.update_activity(activity_id)
-#
-#     def delete(self, activity_id):
-#         return activity_controller.delete_activity(activity_id)
-#
+
+def vectorize_activity(activity):
+    """
+    Convert activity details into a vector for similarity comparison.
+    Use features like location, price, and maxParticipants.
+    """
+    location_map = {
+        'Tunis': 0,
+        'Paris': 1,
+        'New York': 2,
+        # Add more locations as needed
+    }
+
+    location_vector = location_map.get(activity['location'], 0)
+    price_vector = float(activity['price'])
+    participants_vector = int(activity['maxParticipants'])
+
+    return np.array([location_vector, price_vector, participants_vector])
+
+
+def recommend_activities(user_id):
+    try:
+        # Fetch user's past reservations
+        reservations = db.Reservations.find({'userId': user_id})
+        if db.Reservations.count_documents({'userId': user_id}) == 0:
+            return jsonify({'message': 'No reservations found for this user'}), 404
+
+        # Fetch all activities from the database
+        all_activities = list(db.Activities.find())
+
+        if len(all_activities) == 0:
+            return jsonify({'message': 'No activities available'}), 404
+
+        # Vectorize the user's reserved activities
+        user_activity_vectors = []
+        for reservation in reservations:
+            activity = db.Activities.find_one({'_id': ObjectId(reservation['activityId'])})
+            if activity:
+                user_activity_vectors.append(vectorize_activity(activity))
+
+        if len(user_activity_vectors) == 0:
+            return jsonify({'message': 'No matching activities found for user reservations'}), 404
+
+        user_activity_vectors = np.array(user_activity_vectors)
+
+        # Compute similarity between user activities and all available activities
+        all_activity_vectors = np.array([vectorize_activity(act) for act in all_activities])
+
+        # Calculate cosine similarity between user activities and available activities
+        similarity_scores = cosine_similarity(user_activity_vectors, all_activity_vectors)
+
+        # Average similarity scores across all user activities
+        mean_similarity_scores = np.mean(similarity_scores, axis=0)
+
+        # Get the top recommended activities based on similarity scores
+        recommended_indices = mean_similarity_scores.argsort()[::-1][:5]  # Top 5 recommendations
+
+        recommended_activities = [all_activities[i] for i in recommended_indices]
+
+        # Convert ObjectId to string for JSON serialization
+        for activity in recommended_activities:
+            activity['_id'] = str(activity['_id'])
+
+        return jsonify(recommended_activities), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+def train_pricing_model():
+    X = np.array([[20, 5, 12], [10, 10, 18], [5, 15, 9]])  # Dummy data (demand, available_slots, time_of_day, temperature)
+    y = np.array([100, 80, 60, 120])  # Corresponding prices
+
+    model = LinearRegression()
+    model.fit(X, y)
+
+    # Save the model
+    joblib.dump(model, 'pricing_model.pkl')
+
+def load_pricing_model():
+    if not os.path.exists('pricing_model.pkl'):
+        train_pricing_model()
+    return joblib.load('pricing_model.pkl')
+
+def predict_price(demand, available_slots, time_of_day):
+    model = load_pricing_model()
+    features = np.array([[demand, available_slots, time_of_day]])
+    predicted_price = model.predict(features)[0]
+    return int(round(predicted_price))  # Round and convert to integer
+
+# Task to fetch all activities and update prices dynamically
+def dynamic_pricing_task():
+    try:
+        activities = db.Activities.find()
+        current_time = datetime.now().hour  # Get current hour for time_of_day factor
+
+        for activity in activities:
+            activity_id = activity['_id']
+            location = activity['location']
+            # Fetch reservations to calculate demand
+            demand = db.Reservations.count_documents({'activityId': str(activity_id)})
+            print(demand)
+            available_slots = activity['maxParticipants'] - activity['currentParticipants']
+
+
+            # Predict the new price based on demand, availability, and time of day
+            new_price = predict_price(demand, available_slots, current_time)
+
+            # Update the activity price in the database
+            db.Activities.update_one({'_id': ObjectId(activity_id)}, {'$set': {'price': new_price}})
+
+            print(f"Updated price for activity {activity['name']} to {new_price}")
+    except Exception as e:
+        print(f"Error updating activity prices: {str(e)}")
+
+# Schedule the dynamic pricing task to run every 10 minutes
+scheduler.add_job(dynamic_pricing_task, 'interval', minutes=5)
+
+scheduler.start()
 
 @api.route('/activities/time')
 class ActivitiesByTimeResource(Resource):
@@ -56,6 +174,10 @@ class ActivitiesByTimeResource(Resource):
             return {"message": "Invalid date format. Please use ISO format"}, 400
         return activity_controller.get_activities_by_time(start_time, end_time)
 
+
+@app.route('/recommendations/activities/<string:user_id>', methods=['GET'])
+def get_activity_recommendations(user_id):
+    return recommend_activities(user_id)
 @app.route('/activities/', methods=['POST'])
 def create_activity():
     try:
@@ -82,6 +204,7 @@ def create_activity():
 
         # Include the image path in the data to be saved
         data['image_path'] = file_path
+        data['currentParticipants'] = 0
 
         # Insert the activity data into the database
         activity_id = db.Activities.insert_one(data).inserted_id
