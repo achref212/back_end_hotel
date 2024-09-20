@@ -203,7 +203,8 @@ def create_activity():
         image_file.save(file_path)
 
         # Include the image path in the data to be saved
-        data['image_path'] = file_path
+        standardized_file_path = file_path.replace("\\", "/")
+        data['image_path'] = standardized_file_path  # Use the standardized image path
         data['currentParticipants'] = 0
 
         # Insert the activity data into the database

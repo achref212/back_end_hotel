@@ -13,6 +13,8 @@ import joblib
 from sklearn.linear_model import LinearRegression
 from apscheduler.schedulers.background import BackgroundScheduler
 from datetime import datetime
+from flask import send_from_directory
+
 db = mongo.db
 room_controller = RoomController(mongo)
 
@@ -198,12 +200,16 @@ def recommend_rooms(user_id):
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-
+@app.route('/uploads/<path:filename>')
+def serve_uploaded_file(filename):
+    upload_folder = 'D:\\project\\esprit project\\Back_End\\Uploads'
+    try:
+        return send_from_directory(upload_folder, filename, as_attachment=False, mimetype='image/png')
+    except FileNotFoundError:
+        os.abort(404)
 
 @api.route('/rooms')
 class RoomsResource(Resource):
-    # def get(self):
-    #     return room_controller.get_all_rooms()
     @api.expect(file_upload)
     def post(self):
         data = request.form.to_dict()
@@ -221,7 +227,11 @@ class RoomsResource(Resource):
                 os.makedirs(upload_folder)
             file_path = os.path.join(upload_folder, filename)
             image_file.save(file_path)
-            data['image_path'] = file_path  # Include the image path in the data to be saved
+
+            # Standardize the file path to use forward slashes
+            standardized_file_path = file_path.replace("\\", "/")
+            data['image_path'] = standardized_file_path  # Use the standardized image path
+
         else:
             return {'message': 'Invalid image format'}, 400
 
@@ -232,6 +242,8 @@ class RoomsResource(Resource):
         except Exception as e:
             app.logger.error(f"Error inserting room data into MongoDB: {str(e)}")
             return {'message': 'Failed to create room'}, 500
+
+
 
 @api.route('/rooms/<string:room_id>')
 class RoomResource(Resource):
