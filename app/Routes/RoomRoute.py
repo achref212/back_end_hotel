@@ -131,7 +131,7 @@ def dynamic_room_pricing_task():
 
 # Schedule the dynamic pricing task
 scheduler = BackgroundScheduler()
-scheduler.add_job(dynamic_room_pricing_task, 'interval', minutes=3)  # Runs every hour
+scheduler.add_job(dynamic_room_pricing_task, 'interval', minutes=40)  # Runs every hour
 scheduler.start()
 
 # Vectorize room data

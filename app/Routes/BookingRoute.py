@@ -14,14 +14,14 @@ collection = db['Bookings']
 booking_model = api.model('Booking', {
     'userId': fields.String(required=True, description='User ID'),
     'roomId': fields.String(required=True, description='Room ID'),
-    'checkInDate': fields.DateTime(required=True, description='Check-in Date'),
-    'checkOutDate': fields.DateTime(required=True, description='Check-out Date'),
+    'checkInDate': fields.String(required=True, description='Check-in Date'),
+    'checkOutDate': fields.String(required=True, description='Check-out Date'),
     'guests': fields.Integer(required=True, description='Number of Guests'),
     'status': fields.String(required=True, description='Booking Status'),
 })
 
 
-@app.route('/bookings/', methods=['POST'])
+@app.route('/bookings', methods=['POST'])
 def create_booking():
     try:
         data = request.get_json()  # Parse the JSON data sent with the POST request

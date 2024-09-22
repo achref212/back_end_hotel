@@ -154,7 +154,7 @@ def dynamic_pricing_task():
         print(f"Error updating activity prices: {str(e)}")
 
 # Schedule the dynamic pricing task to run every 10 minutes
-scheduler.add_job(dynamic_pricing_task, 'interval', minutes=5)
+scheduler.add_job(dynamic_pricing_task, 'interval', minutes=40)
 
 scheduler.start()
 
